@@ -1,0 +1,101 @@
+import csv
+import os.path
+import requests
+from bs4 import BeautifulSoup
+
+
+def get_main_part_url(url):  # define common url https://volby.cz/pls/ps2017nss/
+    return url.rsplit("/", 1)[0]
+
+
+def get_parties(url, municipality):  # collect all parties and put in list (can be done from any municipality)
+    parties = []
+    soup = get_soup(url)
+    for td in get_td_data(soup, "t1sa1 t1sb2", "t2sa1 t2sb2"):
+        parties.append(td.get_text())
+    return parties
+
+
+def get_header(url, municipality_url):  # creates header list to use for the csv file
+    header = ["code", "location", "registered", "envelopes", "valid"]
+    url = get_main_part_url(url) + "/" + municipality_url
+    soup = get_soup(url)
+    return header + get_parties(url, municipality_url)
+
+
+def get_soup(url):  # requests the page for a municipality and generates the parsed file "soup"
+    request = requests.get(url)
+    request.raise_for_status()
+    return BeautifulSoup(request.text, "html.parser")
+
+
+def get_td_data(soup, *args):  # extracts info from tables with specific attributes
+    td_data = soup.find_all("td", headers=args)
+    return td_data
+
+
+def get_table_data(municipality, municipality_data):
+    return municipality[:2] + municipality_data
+
+
+def get_municipality_names(soup):  # fetches and generates the list of municipalities
+    names = []
+    for tab_number in range(1, 4):
+        for td in (get_td_data(soup, f"t{tab_number}sa1 t{tab_number}sb2")):
+            names.append(td.get_text())
+    return names
+
+
+def get_municipality_code_link(soup):  # fetch code for municipality and corresponding http-link
+    nums_and_links = []
+    for tab_number in range(1, 4):
+        for td in get_td_data(soup, f"t{tab_number}sa1 t{tab_number}sb1"):
+            if td.get_text() != "-":
+                nums_and_links.append((td.get_text(), td.a["href"]))
+    return nums_and_links
+
+def get_municipality_votes(url, municipality):  # collect data from a municipality
+    url = get_main_part_url(url) + "/" + municipality
+    soup = get_soup(url)
+    municipality_votes = []
+    for td in get_td_data(soup, "sa2", "sa3", "sa6", "t1sa2 t1sb3", "t2sa2 t2sb3"):
+        municipality_votes.append(td.get_text().replace("\xa0", ""))
+    return municipality_votes
+
+
+def get_municipalities_list(names, num_and_link):  # Combines codes, names and http-links to common list
+    print("Getting list of municipalities...")
+    municipalities = [[int(num_and_link[0]), name, num_and_link[1]] for name, num_and_link in zip(names, num_and_link)]
+    return municipalities
+
+
+def write_csv(header, table_data, output_file):  # creates the csv file
+    with open(output_file, "a+", newline="") as file:
+        writer = csv.writer(file, delimiter=";")
+        if not os.path.exists(output_file) or os.path.getsize(output_file) == 0:
+            writer.writerow(header)
+        writer.writerows(table_data)
+    print()
+    print(f"File {output_file} was created.")
+
+
+
+if __name__ == '__main__':
+    print("Source URL:", "https://volby.cz/pls/ps2017nss/ps3?xjazyk=CZ")
+    print("Please choose a district from the link above (for example Frýdek-Místek "
+          "\nin the region Moravskoslezský kraj)")
+    url = input("Please insert the url of the chosen district \nwhich show the list of the municipalities: ")
+    filename = input("Please enter the name of the file where the results should be saved (without .csv): ")
+    filename += ".csv"
+    soup = get_soup(url)
+
+    # generate a list with code, municipality
+    municipalities = get_municipalities_list(get_municipality_names(soup), get_municipality_code_link(soup))
+    header = get_header(url, municipalities[0][2])
+
+    table_data = []
+    for municipality in municipalities:  # prepare the list of rows for saving to csv
+        print("\r", "Getting data for...", municipality[1], end="")
+        municipality_data = get_municipality_votes(url, municipality[2])
+        table_data.append(get_table_data(municipality, municipality_data))
+    write_csv(header, table_data, filename)
